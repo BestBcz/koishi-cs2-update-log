@@ -1,0 +1,58 @@
+{
+  "name": "koishi-plugin-cs2-update-log",
+  "version": "1.0.0",
+  "description": "Koishi plugin for monitoring CS2 official Steam announcements and update logs.",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "koishi",
+    "plugin",
+    "cs2",
+    "counter-strike",
+    "steam",
+    "qq"
+  ],
+  "author": "BestBcz",
+  "license": "MIT",
+  "peerDependencies": {
+    "@koishijs/plugin-puppeteer": "^3.2.0",
+    "koishi": "^4.18.0"
+  },
+  "peerDependenciesMeta": {
+    "@koishijs/plugin-puppeteer": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@koishijs/plugin-puppeteer": "^3.2.0",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.0.10",
+    "koishi": "^4.18.8",
+    "typescript": "^5.8.3"
+  },
+  "koishi": {
+    "description": {
+      "zh": "监控 CS2 官方 Steam 公告和更新日志，并推送到指定 QQ 群。",
+      "en": "Monitor official CS2 Steam announcements and update logs."
+    },
+    "service": {
+      "required": [
+        "http"
+      ],
+      "optional": [
+        "puppeteer"
+      ]
+    }
+  }
+}

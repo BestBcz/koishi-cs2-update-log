@@ -1,0 +1,4 @@
+node_modules/
+lib/
+*.tsbuildinfo
+.koishi-cs2-update-log.json

@@ -23,15 +23,9 @@ interface SteamNewsItem {
   gid: string
   title: string
   url?: string
-  is_external_url?: boolean
   author?: string
-  contents: string
-  feedlabel?: string
+  content: string
   date: number
-  feedname?: string
-  feed_type?: number
-  appid?: number
-  tags?: string[]
 }
 
 interface RssFeed {
@@ -241,7 +235,7 @@ export function apply(ctx: Context, config: Config) {
 
   async function pushNews(news: ClassifiedNews) {
     const link = getNewsLink(news.item)
-    const baseMarkdown = steamBbcodeToMarkdown(news.item.contents)
+    const baseMarkdown = steamContentToMarkdown(news.item.content)
     const translated = await maybeTranslate(news.item.title, baseMarkdown)
     const displayTitle = translated.title || news.item.title
     const displayMarkdown = translated.markdown || baseMarkdown
@@ -407,7 +401,7 @@ export function apply(ctx: Context, config: Config) {
 }
 
 function classifyNews(item: SteamNewsItem): ClassifiedNews {
-  const body = decodeHtmlEntities(item.contents || '')
+  const body = decodeHtmlEntities(item.content || '')
   const isUpdate = updateTitlePattern.test(item.title)
     || updateSectionPattern.test(body)
     || updateSectionInlinePattern.test(body)
@@ -435,11 +429,8 @@ function parseRssItem(item: RssItem): SteamNewsItem | null {
     title,
     url,
     author: 'Valve',
-    contents: readXmlText(item.description),
+    content: readXmlText(item.description),
     date: Number.isFinite(dateValue) ? Math.floor(dateValue / 1000) : 0,
-    feedlabel: 'Steam News RSS',
-    feedname: 'steam_store_news_rss',
-    appid: APP_ID,
   }
 }
 
@@ -453,7 +444,7 @@ function extractNewsGid(value: string) {
   return value.match(/\/view\/(\d+)/)?.[1] || ''
 }
 
-function steamBbcodeToMarkdown(input: string): string {
+function steamContentToMarkdown(input: string): string {
   let output = decodeHtmlEntities(input || '')
     .replace(/\r\n?/g, '\n')
     .replace(/\\([\[\]])/g, '$1')

@@ -119,6 +119,7 @@ const markdown = new MarkdownIt({
 const rssParser = new XMLParser({
   ignoreAttributes: false,
   parseTagValue: false,
+  processEntities: false,
   trimValues: true,
 })
 
@@ -415,7 +416,7 @@ function classifyNews(item: SteamNewsItem): ClassifiedNews {
 }
 
 function parseRssItem(item: RssItem): SteamNewsItem | null {
-  const title = readXmlText(item.title)
+  const title = decodeHtmlEntities(readXmlText(item.title))
   const url = readXmlText(item.link)
   const guid = readXmlText(item.guid)
   const gid = extractNewsGid(guid) || extractNewsGid(url)

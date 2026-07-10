@@ -140,7 +140,7 @@ export const Config: Schema<Config> = Schema.object({
     guildId: Schema.string().description('可选群组 ID。标准 bot.sendMessage 只使用 channelId，此字段用于记录配置语义。'),
   })).default([]).description('推送目标列表。'),
   brandName: Schema.string().default('CS2 update').description('图片顶部品牌名。'),
-  siteName: Schema.string().default('CS2官方').description('图片底部站点名。'),
+  siteName: Schema.string().default('Github仓库').description('图片底部站点名。'),
   picture: Schema.boolean().default(true).description('是否以 Puppeteer 截图长图形式推送。关闭后推送纯文本。'),
   appendLink: Schema.boolean().default(true).description('图片或文本后是否附带 Steam 原文链接。'),
   trans: Schema.boolean().default(false).description('是否启用 AI 翻译。关闭时推送 Steam 返回的原文。'),
@@ -629,7 +629,7 @@ function parseRssItem(item: RssItem): SteamNewsItem | null {
     gid,
     title,
     url,
-    author: 'Valve',
+    author: 'BestBcz',
     content: readXmlText(item.description),
     date: Number.isFinite(dateValue) ? Math.floor(dateValue / 1000) : 0,
   }

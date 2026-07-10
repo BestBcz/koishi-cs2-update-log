@@ -809,7 +809,7 @@ function buildCardHtml(news: ClassifiedNews, title: string, bodyMarkdown: string
   const categoryTag = news.category === 'update' ? 'UPDATE LOG' : 'ANNOUNCEMENT'
   const rendered = markdown.render(bodyMarkdown)
   const publishedAt = formatDate(news.item.date)
-  const author = news.item.author || 'Valve'
+  const author = news.item.author || 'BestBcz'
 
   return `<!doctype html>
 <html lang="zh-CN">

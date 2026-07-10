@@ -31,3 +31,8 @@
 - `cs2log.check`：查看最近 5 条新闻的分类结果。
 - `cs2log.push`：手动检查并推送新内容。
 - `cs2log.test`：在输入该指令的当前群测试推送最近 2 条新闻。
+
+## 示例
+<img width="673" height="981" alt="367edde18a4814d125054ada25783c1c" src="https://github.com/user-attachments/assets/fa30d1f8-0783-4bab-93ef-fd06bcab9132" />
+
+

@@ -15,11 +15,10 @@ export const inject = {
 const APP_ID = 730
 const STEAM_FASTLY_RSS_URL = `https://store.fastly.steamstatic.com/feeds/news/app/${APP_ID}/`
 const STEAM_STORE_RSS_URL = `https://store.steampowered.com/feeds/news/app/${APP_ID}/`
-const STEAM_NEWS_API_URL = 'https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/'
 const STATE_LIMIT = 1000
 const RSS_LIST_CACHE_TTL_MS = 3 * 1000
 const RSS_CACHE_BUCKET_MS = 30 * 1000
-const STEAM_REQUEST_TIMEOUT_MS = 8 * 1000
+const RSS_REQUEST_TIMEOUT_MS = 8 * 1000
 const RUNTIME_CACHE_CLEAR_INTERVAL_MS = 5 * 60 * 1000
 const TRANSLATE_TIMEOUT_MS = 90 * 1000
 const ASSET_DIR = path.resolve(__dirname, '..', 'assets')
@@ -53,21 +52,6 @@ interface RssItem {
   link?: XmlText
   guid?: XmlText
   pubDate?: XmlText
-}
-
-interface SteamNewsApiResponse {
-  appnews?: {
-    newsitems?: SteamNewsApiItem[]
-  }
-}
-
-interface SteamNewsApiItem {
-  gid?: string | number
-  title?: string
-  url?: string
-  author?: string
-  contents?: string
-  date?: number
 }
 
 type XmlText = string | number | {
@@ -114,6 +98,7 @@ interface CardAssets {
 export interface Config {
   interval: number
   count: number
+  iceqRssBaseUrl: string
   stateFile: string
   pushOnFirstRun: boolean
   targets: TargetConfig[]
@@ -130,7 +115,8 @@ export interface Config {
 
 export const Config: Schema<Config> = Schema.object({
   interval: Schema.number().min(5).step(1).default(30).description('轮询间隔，单位：秒。'),
-  count: Schema.number().min(1).max(100).step(1).default(5).description('每次从 Steam 拉取的新闻数量。'),
+  count: Schema.number().min(1).max(100).step(1).default(5).description('每次从 RSS 新闻源读取的新闻数量。'),
+  iceqRssBaseUrl: Schema.string().default('https://ghproxy.vip/https://raw.githubusercontent.com/IceQ1337/CS-RSS-Feed/master/feeds').description('IceQ1337/CS-RSS-Feed 的 RSS 镜像目录。Fastly RSS 不可用时读取该目录下的英文 news 与 updates feed。'),
   stateFile: Schema.string().default('.koishi-cs2-update-log.json').description('本地 gid 判重文件路径。相对路径会基于 Koishi 启动目录解析。'),
   pushOnFirstRun: Schema.boolean().default(false).description('首次启动时是否推送历史内容。默认关闭，避免刷屏。'),
   targets: Schema.array(Schema.object({
@@ -245,18 +231,19 @@ export function apply(ctx: Context, config: Config) {
 
       const cacheBucket = Math.floor(Date.now() / RSS_CACHE_BUCKET_MS)
       const fastlyUrl = `${STEAM_FASTLY_RSS_URL}?l=english&_=${cacheBucket}`
-      const apiUrl = `${STEAM_NEWS_API_URL}?appid=${APP_ID}&count=${config.count}&maxlength=0&format=json`
+      const storeUrl = `${STEAM_STORE_RSS_URL}?l=english&_=${cacheBucket}`
 
       let items: SteamNewsItem[]
       try {
-        items = await Promise.any([
-          fetchRssSource('Fastly RSS', fastlyUrl),
-          fetchApiSource('Steam Web API', apiUrl),
-        ])
-      } catch (primaryError) {
-        const storeUrl = `${STEAM_STORE_RSS_URL}?l=english&_=${cacheBucket}`
-        logger.warn('Fastly RSS 与 Steam Web API 均不可用，回退到 Store RSS：%s', formatAggregateError(primaryError))
-        items = await fetchRssSource('Store RSS', storeUrl)
+        items = await fetchRssSource('Fastly RSS', fastlyUrl)
+      } catch (fastlyError) {
+        logger.warn('Fastly RSS 不可用，回退到 IceQ RSS：%s', formatError(fastlyError))
+        try {
+          items = await fetchIceqRssFeeds(cacheBucket)
+        } catch (iceqError) {
+          logger.warn('IceQ RSS 不可用，回退到 Store RSS：%s', formatError(iceqError))
+          items = await fetchRssSource('Store RSS', storeUrl)
+        }
       }
 
       const cachedItems = items.map((item) => {
@@ -278,6 +265,24 @@ export function apply(ctx: Context, config: Config) {
     }
   }
 
+  async function fetchIceqRssFeeds(cacheBucket: number): Promise<SteamNewsItem[]> {
+    const baseUrl = config.iceqRssBaseUrl.trim().replace(/\/+$/, '')
+    if (!baseUrl) throw new Error('未配置 IceQ RSS 镜像目录')
+
+    const [newsItems, updateItems] = await Promise.all([
+      fetchRssSource('IceQ News RSS', `${baseUrl}/news-feed-en.xml?_=${cacheBucket}`),
+      fetchRssSource('IceQ Updates RSS', `${baseUrl}/updates-feed-en.xml?_=${cacheBucket}`),
+    ])
+
+    const itemsByGid = new Map<string, SteamNewsItem>()
+    for (const item of [...newsItems, ...updateItems]) {
+      const current = itemsByGid.get(item.gid)
+      if (!current || item.date > current.date) itemsByGid.set(item.gid, item)
+    }
+
+    return Array.from(itemsByGid.values()).sort((left, right) => right.date - left.date)
+  }
+
   async function fetchRssSource(source: string, url: string): Promise<SteamNewsItem[]> {
     const startedAt = Date.now()
     try {
@@ -287,7 +292,7 @@ export function apply(ctx: Context, config: Config) {
           'User-Agent': 'koishi-plugin-cs2-update-log/2.2',
         },
         responseType: 'text',
-        timeout: STEAM_REQUEST_TIMEOUT_MS,
+        timeout: RSS_REQUEST_TIMEOUT_MS,
       })
 
       const parsed = rssParser.parse(xml) as RssFeed
@@ -296,29 +301,6 @@ export function apply(ctx: Context, config: Config) {
 
       const parsedItems = items
         .map(parseRssItem)
-        .filter((item): item is SteamNewsItem => !!item?.gid && !!item.title)
-
-      if (!parsedItems.length) throw new Error('返回内容中没有有效新闻')
-      logger.debug('%s 拉取成功：items=%d duration=%dms', source, parsedItems.length, Date.now() - startedAt)
-      return parsedItems
-    } catch (error) {
-      logger.debug('%s 拉取失败：duration=%dms url=%s\n%s', source, Date.now() - startedAt, url, formatError(error))
-      throw new Error(`${source} 拉取失败：${formatError(error)}`)
-    }
-  }
-
-  async function fetchApiSource(source: string, url: string): Promise<SteamNewsItem[]> {
-    const startedAt = Date.now()
-    try {
-      const response = await ctx.http.get<SteamNewsApiResponse>(url, {
-        headers: {
-          Accept: 'application/json',
-          'User-Agent': 'koishi-plugin-cs2-update-log/2.2',
-        },
-        timeout: STEAM_REQUEST_TIMEOUT_MS,
-      })
-      const parsedItems = (response.appnews?.newsitems || [])
-        .map(parseSteamApiItem)
         .filter((item): item is SteamNewsItem => !!item?.gid && !!item.title)
 
       if (!parsedItems.length) throw new Error('返回内容中没有有效新闻')
@@ -699,21 +681,6 @@ function parseRssItem(item: RssItem): SteamNewsItem | null {
   }
 }
 
-function parseSteamApiItem(item: SteamNewsApiItem): SteamNewsItem | null {
-  const gid = String(item.gid || '').trim()
-  const title = decodeHtmlEntities(String(item.title || '').trim())
-  if (!gid || !title) return null
-
-  return {
-    gid,
-    title,
-    url: String(item.url || '').trim(),
-    author: String(item.author || 'Valve').trim(),
-    content: String(item.contents || ''),
-    date: Number.isFinite(item.date) ? Number(item.date) : 0,
-  }
-}
-
 function readXmlText(value: XmlText | undefined): string {
   if (value == null) return ''
   if (typeof value === 'string' || typeof value === 'number') return String(value).trim()
@@ -721,7 +688,9 @@ function readXmlText(value: XmlText | undefined): string {
 }
 
 function extractNewsGid(value: string) {
-  return value.match(/\/view\/(\d+)/)?.[1] || ''
+  const normalized = value.trim()
+  if (/^\d+$/.test(normalized)) return normalized
+  return normalized.match(/\/(?:view|newsentry)\/(\d+)/)?.[1] || ''
 }
 
 function steamContentToMarkdown(input: string): string {
@@ -1191,13 +1160,6 @@ function formatError(error: unknown) {
   const lines: string[] = []
   appendErrorDetails(lines, error)
   return lines.join('\n')
-}
-
-function formatAggregateError(error: unknown) {
-  if (error instanceof AggregateError) {
-    return error.errors.map((item) => formatError(item)).join(' | ')
-  }
-  return formatError(error)
 }
 
 function appendErrorDetails(lines: string[], error: unknown, label = 'error', depth = 0, seen = new Set<unknown>()) {

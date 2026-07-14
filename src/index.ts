@@ -736,12 +736,16 @@ function steamContentToMarkdown(input: string): string {
     .replace(/\[img\]([\s\S]*?)\[\/img\]/gi, '')
     .replace(/\[previewyoutube=[^\]]+\]([\s\S]*?)\[\/previewyoutube\]/gi, '')
     .replace(/\[list\]|\[\/list\]|\[olist\]|\[\/olist\]/gi, '\n')
-    .replace(/^\s*\[\*\]\s*/gim, '- ')
+    .replace(/[ \t]*\[\/p\][ \t]*\[\/\*\]/gi, '\n')
+    .replace(/^\s*\[\*\]\s*(?:\[p\]\s*)?/gim, '- ')
+    .replace(/\[\/\*\]/gi, '\n')
+    .replace(/\[p\]\s*/gi, '')
+    .replace(/[ \t]*\[\/p\]/gi, '\n')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>\s*<p>/gi, '\n\n')
     .replace(/<\/?p>/gi, '\n')
 
-  output = output.replace(sectionHeadingPattern, (_, section) => `\n## [${String(section).toUpperCase()}]\n`)
+  output = output.replace(sectionHeadingPattern, (_, section) => `\n## [${String(section).trim().toUpperCase()}]\n`)
   sectionHeadingPattern.lastIndex = 0
 
   return output

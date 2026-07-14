@@ -104,6 +104,7 @@ export interface Config {
   targets: TargetConfig[]
   brandName: string
   siteName: string
+  author: string
   picture: boolean
   appendLink: boolean
   trans: boolean
@@ -127,6 +128,7 @@ export const Config: Schema<Config> = Schema.object({
   })).default([]).description('推送目标列表。'),
   brandName: Schema.string().default('CS2 update').description('图片顶部品牌名。'),
   siteName: Schema.string().default('Github仓库').description('图片底部站点名。'),
+  author: Schema.string().default('BestBcz').description('图片底部显示的作者名。'),
   picture: Schema.boolean().default(true).description('是否以 Puppeteer 截图长图形式推送。关闭后推送纯文本。'),
   appendLink: Schema.boolean().default(true).description('图片或文本后是否附带 Steam 原文链接。'),
   trans: Schema.boolean().default(false).description('是否启用 AI 翻译。关闭时推送 Steam 返回的原文。'),
@@ -300,7 +302,7 @@ export function apply(ctx: Context, config: Config) {
       const items = Array.isArray(rawItems) ? rawItems : rawItems ? [rawItems] : []
 
       const parsedItems = items
-        .map(parseRssItem)
+        .map((item) => parseRssItem(item, config.author))
         .filter((item): item is SteamNewsItem => !!item?.gid && !!item.title)
 
       if (!parsedItems.length) throw new Error('返回内容中没有有效新闻')
@@ -435,7 +437,7 @@ export function apply(ctx: Context, config: Config) {
     }
 
     try {
-      const cacheKey = hashCacheKey('card-image', news.item.gid, news.category, config.brandName, config.siteName, title, bodyMarkdown)
+      const cacheKey = hashCacheKey('card-image', news.item.gid, news.category, config.brandName, config.siteName, config.author, title, bodyMarkdown)
       let png = cache.cardImages.get(cacheKey)
       if (!png) {
         png = await renderCard(puppeteer, news, title, bodyMarkdown)
@@ -661,7 +663,7 @@ function classifyNews(item: SteamNewsItem): ClassifiedNews {
   }
 }
 
-function parseRssItem(item: RssItem): SteamNewsItem | null {
+function parseRssItem(item: RssItem, author: string): SteamNewsItem | null {
   const title = decodeHtmlEntities(readXmlText(item.title))
   const url = readXmlText(item.link)
   const guid = readXmlText(item.guid)
@@ -675,7 +677,7 @@ function parseRssItem(item: RssItem): SteamNewsItem | null {
     gid,
     title,
     url,
-    author: 'BestBcz',
+    author,
     content: readXmlText(item.description),
     date: Number.isFinite(dateValue) ? Math.floor(dateValue / 1000) : 0,
   }
@@ -778,7 +780,7 @@ function buildCardHtml(news: ClassifiedNews, title: string, bodyMarkdown: string
   const categoryTag = news.category === 'update' ? 'UPDATE LOG' : 'ANNOUNCEMENT'
   const rendered = markdown.render(bodyMarkdown)
   const publishedAt = formatDate(news.item.date)
-  const author = news.item.author || 'BestBcz'
+  const author = news.item.author || config.author
 
   return `<!doctype html>
 <html lang="zh-CN">

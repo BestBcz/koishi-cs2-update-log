@@ -81,6 +81,13 @@ interface TranslateResult {
   markdown: string
 }
 
+interface TranslateProvider {
+  name: string
+  apiKey: string
+  endpoint: string
+  model: string
+}
+
 interface RuntimeCache {
   rssFetchedAt: number
   rssItems: SteamNewsItem[]
@@ -111,6 +118,9 @@ export interface Config {
   translateApiKey: string
   translateApiEndpoint: string
   translateModel: string
+  translateBackupApiKey: string
+  translateBackupApiEndpoint: string
+  translateBackupModel: string
   translatePrompt: string
 }
 
@@ -135,6 +145,9 @@ export const Config: Schema<Config> = Schema.object({
   translateApiKey: Schema.string().role('secret').description('AI 翻译 API Key。启用 trans 时必填。'),
   translateApiEndpoint: Schema.string().default('https://api.openai.com/v1/chat/completions').description('OpenAI-compatible Chat Completions 接口地址。'),
   translateModel: Schema.string().default('gpt-4o-mini').description('AI 翻译模型名。'),
+  translateBackupApiKey: Schema.string().role('secret').default('').description('备用 AI 翻译 API Key。与备用接口地址、模型同时填写后启用。'),
+  translateBackupApiEndpoint: Schema.string().default('').description('备用 OpenAI-compatible Chat Completions 接口地址。主接口失败后自动调用。'),
+  translateBackupModel: Schema.string().default('').description('备用 AI 翻译模型名。'),
   translatePrompt: Schema.string().role('textarea').default('你是一个专业的游戏公告翻译助手。请将 CS2 Steam 官方公告翻译为简体中文，保留 Markdown 结构、更新分区、列表、粗体、行内代码和代码块，不要添加原文没有的解释。').description('AI 翻译系统提示词。'),
 })
 
@@ -488,62 +501,113 @@ export function apply(ctx: Context, config: Config) {
 
   async function maybeTranslate(title: string, bodyMarkdown: string): Promise<TranslateResult> {
     if (!config.trans) return { title, markdown: bodyMarkdown }
-    if (!config.translateApiKey) {
-      logger.warn('已开启 AI 翻译但未填写 translateApiKey，将推送原文。')
+
+    const providers: TranslateProvider[] = []
+    if (config.translateApiKey?.trim()) {
+      providers.push({
+        name: '主',
+        apiKey: config.translateApiKey.trim(),
+        endpoint: config.translateApiEndpoint.trim(),
+        model: config.translateModel.trim(),
+      })
+    } else {
+      logger.warn('已开启 AI 翻译但未填写 translateApiKey，将尝试备用接口。')
+    }
+
+    const backupApiKey = config.translateBackupApiKey?.trim()
+    const backupEndpoint = config.translateBackupApiEndpoint?.trim()
+    const backupModel = config.translateBackupModel?.trim()
+    if (backupApiKey && backupEndpoint && backupModel) {
+      providers.push({
+        name: '备用',
+        apiKey: backupApiKey,
+        endpoint: backupEndpoint,
+        model: backupModel,
+      })
+    } else if (backupApiKey || backupEndpoint || backupModel) {
+      logger.warn('备用 AI 翻译配置不完整，需要同时填写 translateBackupApiKey、translateBackupApiEndpoint 和 translateBackupModel。')
+    }
+
+    if (!providers.length) {
+      logger.warn('没有可用的 AI 翻译接口，将推送原文。')
       return { title, markdown: bodyMarkdown }
     }
 
-    const cacheKey = hashCacheKey('translation', config.translateApiEndpoint, config.translateModel, config.translatePrompt, title, bodyMarkdown)
+    const cacheKey = hashCacheKey(
+      'translation',
+      ...providers.flatMap((provider) => [provider.endpoint, provider.model]),
+      config.translatePrompt,
+      title,
+      bodyMarkdown,
+    )
     const cached = cache.translations.get(cacheKey)
     if (cached) {
       logger.debug('使用 AI 翻译缓存：title=%s', title)
       return cached
     }
 
-    try {
-      const response = await ctx.http.post<ChatCompletionResponse>(config.translateApiEndpoint, {
-        model: config.translateModel,
-        messages: [
-          {
-            role: 'system',
-            content: config.translatePrompt,
-          },
-          {
-            role: 'user',
-            content: [
-              '请输出严格 JSON，不要使用 Markdown 代码块。',
-              'JSON 结构为 {"title":"翻译后的标题","markdown":"翻译后的正文 Markdown"}。',
-              '保留原文的 Markdown 层级、列表、粗体、行内 code 和代码块。',
-              '',
-              `标题：${title}`,
-              '',
-              '正文 Markdown：',
-              bodyMarkdown,
-            ].join('\n'),
-          },
-        ],
-        temperature: 0.2,
-      }, {
-        headers: {
-          Authorization: `Bearer ${config.translateApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: TRANSLATE_TIMEOUT_MS,
-      })
-
-      const content = response?.choices?.[0]?.message?.content?.trim()
-      if (!content) throw new Error('empty translation response')
-
-      const parsed = parseJsonObject(content) as Partial<TranslateResult>
-      const translated = {
-        title: parsed.title || title,
-        markdown: parsed.markdown || bodyMarkdown,
+    for (let index = 0; index < providers.length; index++) {
+      const provider = providers[index]
+      try {
+        const translated = await requestTranslation(provider, title, bodyMarkdown)
+        cache.translations.set(cacheKey, translated)
+        if (provider.name === '备用') logger.info('备用 AI 翻译接口调用成功：title=%s', title)
+        return translated
+      } catch (error) {
+        const nextProvider = providers[index + 1]
+        if (nextProvider) {
+          logger.warn('%s AI 翻译接口失败，将尝试%s接口：%s', provider.name, nextProvider.name, formatError(error))
+        } else {
+          logger.error('%s AI 翻译接口失败，将推送原文：%s', provider.name, formatError(error))
+        }
       }
-      cache.translations.set(cacheKey, translated)
-      return translated
-    } catch (error) {
-      logger.error('AI 翻译失败，将推送原文：%s', formatError(error))
-      return { title, markdown: bodyMarkdown }
+    }
+
+    return { title, markdown: bodyMarkdown }
+  }
+
+  async function requestTranslation(provider: TranslateProvider, title: string, bodyMarkdown: string): Promise<TranslateResult> {
+    const response = await ctx.http.post<ChatCompletionResponse>(provider.endpoint, {
+      model: provider.model,
+      messages: [
+        {
+          role: 'system',
+          content: config.translatePrompt,
+        },
+        {
+          role: 'user',
+          content: [
+            '请输出严格 JSON，不要使用 Markdown 代码块。',
+            'JSON 结构为 {"title":"翻译后的标题","markdown":"翻译后的正文 Markdown"}。',
+            '保留原文的 Markdown 层级、列表、粗体、行内 code 和代码块。',
+            '',
+            `标题：${title}`,
+            '',
+            '正文 Markdown：',
+            bodyMarkdown,
+          ].join('\n'),
+        },
+      ],
+      temperature: 0.2,
+    }, {
+      headers: {
+        Authorization: `Bearer ${provider.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: TRANSLATE_TIMEOUT_MS,
+    })
+
+    const content = response?.choices?.[0]?.message?.content?.trim()
+    if (!content) throw new Error('empty translation response')
+
+    const parsed = parseJsonObject(content) as Partial<TranslateResult>
+    const translatedTitle = typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title : ''
+    const translatedMarkdown = typeof parsed.markdown === 'string' && parsed.markdown.trim() ? parsed.markdown : ''
+    if (!translatedTitle && !translatedMarkdown) throw new Error('translation response has no translated content')
+
+    return {
+      title: translatedTitle || title,
+      markdown: translatedMarkdown || bodyMarkdown,
     }
   }
 
